@@ -1,0 +1,238 @@
+    #include <WiFi.h>
+    #include <WiFiMulti.h>
+    #include <math.h>
+    #include <Adafruit_Sensor.h>
+    #include <Adafruit_AHTX0.h>
+    #include <Adafruit_BMP280.h>
+    #include <Adafruit_MPU6050.h>
+    #include <InfluxDbClient.h>
+     
+     
+    // Wi-Fi AP SSID
+    #define WIFI_SSID "Wi-Fi"
+    // Wi-Fi Password
+    #define WIFI_PASSWORD "Password"
+    // InfluxDB v2 Server URL, e.g. https://eu-central-1-1.aws.cloud2.influxdata.com (Use: InfluxDB UI -> Load Data -> Client Libraries)
+    #define INFLUXDB_URL "URL"
+    // InfluxDB v2 Server or Cloud API Token (Use: InfluxDB UI -> Data -> API Tokens -> Generate API Token)
+    #define INFLUXDB_TOKEN "TOEKN"
+    // InfluxDB v2 Organization ID (Use: InfluxDB UI -> User -> About -> Common Ids )
+    #define INFLUXDB_ORG "Test"
+    // InfluxDB v2 Bucket Name (Use: InfluxDB UI ->  Data -> Buckets)
+    #define INFLUXDB_BUCKET "Weather"
+    // Set Timezone String According to https://www.gnu.org/software/libc/manual/html_node/TZ-Variable.html
+    #define TZ_INFO "UTC +10"
+     
+     
+    // InfluxDB Client Instance with Preconfigured InfluxCloud Certificate
+    InfluxDBClient client(INFLUXDB_URL, INFLUXDB_ORG, INFLUXDB_BUCKET, INFLUXDB_TOKEN);
+     
+    WiFiMulti wifiMulti;
+    Adafruit_AHTX0 aht;
+    Adafruit_BMP280 bmp;
+    Adafruit_MPU6050 mpu;
+     
+    // Setup Code to Run Once
+    void setup() {
+      Serial.begin(115200);
+     
+      // Connect to Wi-Fi
+      WiFi.mode(WIFI_STA);
+      wifiMulti.addAP(WIFI_SSID, WIFI_PASSWORD);
+     
+      Serial.print("Connecting to Wi-Fi");
+      while (wifiMulti.run() != WL_CONNECTED) {
+        Serial.print(".");
+        delay(100);
+      }
+      Serial.println();
+     
+      // Initialize the AHT10 Sensor
+      if (!aht.begin()) {
+        Serial.println("Could Not Find AHT10 Sensor!");
+        while (1);
+      }
+     
+      // Initialize the BMP280 Sensor
+      if (!bmp.begin(0x76)) {
+      Serial.println("Could Not Find BMP280 Sensor");
+      while (1);
+      }
+     
+      // Initialize the MPU6050 Sensor
+      if (!mpu.begin()) {
+      Serial.println("Could Not Find MPU6050 Sensor");
+      while (1);
+      }
+     
+      // MPU 6050 Details
+      mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+      Serial.print("Accelerometer range set to: ");
+      switch (mpu.getAccelerometerRange()) {
+      case MPU6050_RANGE_2_G:
+        Serial.println("+-2G");
+        break;
+      case MPU6050_RANGE_4_G:
+        Serial.println("+-4G");
+        break;
+      case MPU6050_RANGE_8_G:
+        Serial.println("+-8G");
+        break;
+      case MPU6050_RANGE_16_G:
+        Serial.println("+-16G");
+        break;
+      }
+      mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+      Serial.print("Gyro range set to: ");
+      switch (mpu.getGyroRange()) {
+      case MPU6050_RANGE_250_DEG:
+        Serial.println("+- 250 deg/s");
+        break;
+      case MPU6050_RANGE_500_DEG:
+        Serial.println("+- 500 deg/s");
+        break;
+      case MPU6050_RANGE_1000_DEG:
+        Serial.println("+- 1000 deg/s");
+        break;
+      case MPU6050_RANGE_2000_DEG:
+        Serial.println("+- 2000 deg/s");
+        break;
+      }
+     
+      mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+      Serial.print("Filter bandwidth set to: ");
+      switch (mpu.getFilterBandwidth()) {
+      case MPU6050_BAND_260_HZ:
+        Serial.println("260 Hz");
+        break;
+      case MPU6050_BAND_184_HZ:
+        Serial.println("184 Hz");
+        break;
+      case MPU6050_BAND_94_HZ:
+        Serial.println("94 Hz");
+        break;
+      case MPU6050_BAND_44_HZ:
+        Serial.println("44 Hz");
+        break;
+      case MPU6050_BAND_21_HZ:
+        Serial.println("21 Hz");
+        break;
+      case MPU6050_BAND_10_HZ:
+        Serial.println("10 Hz");
+        break;
+      case MPU6050_BAND_5_HZ:
+        Serial.println("5 Hz");
+        break;
+      }
+     
+     
+      // Accurate time is necessary for certificate validation and writing in batches
+      // For the fastest time sync find NTP servers in your area: https://www.pool.ntp.org/zone/
+      // Syncing progress and the time will be printed to Serial.
+      timeSync(TZ_INFO, "pool.ntp.org", "time.nis.gov");
+     
+      // Check Server Connection
+      if (client.validateConnection()) {
+        Serial.print("Connected to InfluxDB: ");
+        Serial.println(client.getServerUrl());
+      }
+      else {
+        Serial.print("InfluxDB Connection Failed: ");
+        Serial.println(client.getLastErrorMessage());
+      }
+     
+      /* Default Settings from Datasheet */
+      bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     /* Operating Mode */
+                      Adafruit_BMP280::SAMPLING_X2,     /* Temperature Oversampling */
+                      Adafruit_BMP280::SAMPLING_X16,    /* Pressure Oversampling */
+                      Adafruit_BMP280::FILTER_X16,      /* Filtering */
+                      Adafruit_BMP280::STANDBY_MS_500); /* Standby Time */  
+    }
+     
+    // Code to Run in Loop
+    void loop() {
+      // Read Sensor Values
+     
+      // Sensor Event  
+      sensors_event_t aht10humidity, aht10temp, mpu6050accelerometer, mpu6050gyroscope, mpu6050temp;
+     
+      // AHT 10
+      aht.getEvent(&aht10humidity, &aht10temp);
+     
+      // TEMP 6000
+      int const TEMP6000_PIN = 34; // Analog Pin 34
+      int const AREF = 3.3;        // set for 5.0 or 3.3 depending on voltage of uC
+      // Luminescence Math from Analog Reading (0-4095) for ESP32 12 bit
+      float sensor_value = analogRead(TEMP6000_PIN); // Get Raw Sensor Reading
+      float volts = sensor_value * AREF / 4095.0;    // Convert Reading to Voltage
+      float amps = volts / 10000.0;                  // Convert to Amps Across 10K Resistor
+      float microamps = amps * 1000000.0;            // Convert Amps to Microamps
+      float lux = microamps * 2.0;                   // 2 Microamps = 1 lux
+     
+      //BMP 280
+      float bmpTemp = bmp.readTemperature();
+      float bmpPressure = bmp.readPressure()/100;             // Pascal to Hectopascal
+      float bmpAltitude = bmp.readAltitude(1013.25);          //The "1013.25" is the Pressure(hPa) at Sea Level
+     
+      // MPU 6050
+      mpu.getEvent(&mpu6050accelerometer, &mpu6050gyroscope, &mpu6050temp);
+     
+      // Create Data Points
+      Point temp6000("TEMP6000");
+      Point aht10("AHT10");
+      Point bmp280("BMP280");
+      Point mpu6050("MPU6050");
+     
+      // Field for AHT10
+      aht10.addField("Temperature", aht10temp.temperature);
+      aht10.addField("Relative Humidity", aht10humidity.relative_humidity);
+      // Field for TEMP6000
+      temp6000.addField("Lux", lux);
+      temp6000.addField("Raw ADC Data", (int)sensor_value);
+      temp6000.addField("Volts", volts);
+      // Field for BMP280
+      bmp280.addField("Temperature", bmpTemp);
+      bmp280.addField("Pressure", bmpPressure);
+      bmp280.addField("Approx Altitude", bmpAltitude);
+      // Field for MPU6050
+      mpu6050.addField("Temperature", mpu6050temp.temperature);
+      mpu6050.addField("Accelerometer X", mpu6050accelerometer.acceleration.x);
+      mpu6050.addField("Accelerometer Y", mpu6050accelerometer.acceleration.y);
+      mpu6050.addField("Accelerometer Z", mpu6050accelerometer.acceleration.z);
+      mpu6050.addField("Gyroscope X", mpu6050gyroscope.gyro.x * 180 / PI);
+      mpu6050.addField("Gyroscope Y", mpu6050gyroscope.gyro.y * 180 / PI);
+      mpu6050.addField("Gyroscope Z", mpu6050gyroscope.gyro.z * 180 / PI);
+     
+      // Check Wi-Fi Connection and Reconnect if Needed
+      if (wifiMulti.run() != WL_CONNECTED)
+      {
+        Serial.println("Wi-Fi Connection Lost!");
+      }
+     
+      // Write Point
+      if (!client.writePoint(temp6000))
+      {
+        Serial.print("InfluxDB Write Failed For TEMP6000: ");
+        Serial.println(client.getLastErrorMessage());
+      }
+     
+      if (!client.writePoint(aht10))
+      {
+        Serial.print("InfluxDB Write Failed For AHT10: ");
+        Serial.println(client.getLastErrorMessage());
+      }
+     
+      if (!client.writePoint(bmp280))
+      {
+        Serial.print("InfluxDB Write Failed For BMP280: ");
+        Serial.println(client.getLastErrorMessage());
+      }
+     
+      if (!client.writePoint(mpu6050))
+      {
+        Serial.print("InfluxDB Write Failed For MPU6050: ");
+        Serial.println(client.getLastErrorMessage());
+      }
+     
+      delay(10000);
+    }
